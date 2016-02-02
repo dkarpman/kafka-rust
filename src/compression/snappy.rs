@@ -1,69 +1,24 @@
-extern crate libc;
+extern crate rsnappy;
 
-use self::libc::{c_int, size_t};
-use std::io::{self, Read};
-
+use std::io::{self, Cursor, Read};
 use byteorder::{BigEndian, ByteOrder};
+
 use error::{Result, Error};
 
-extern {
-    fn snappy_compress(input: *const u8,
-                       input_length: size_t,
-                       compressed: *mut u8,
-                       compressed_length: *mut size_t) -> c_int;
-
-    fn snappy_max_compressed_length(source_length: size_t) -> size_t;
-
-    fn snappy_uncompress(compressed: *const u8,
-                             compressed_length: size_t,
-                             uncompressed: *mut u8,
-                             uncompressed_length: *mut size_t) -> c_int;
-
-    fn snappy_uncompressed_length(compressed: *const u8,
-                                  compressed_length: size_t,
-                                  result: *mut size_t) -> c_int;
-}
-
-// ~ Uncompresse 'src' into 'dst'.
+// ~ Uncompresses 'src' into 'dst'.
 // ~ 'dst' will receive the newly uncompressed data appended.
 // ~ No guarantees are provided about the contents of 'dst' if this function
 // results in an error.
 fn uncompress_into(src: &[u8], dst: &mut Vec<u8>) -> Result<()> {
-    unsafe {
-        let src_len = src.len() as size_t;
-        let src_ptr = src.as_ptr();
-
-        let dst_cur_len = dst.len();
-        let mut dst_add_len: size_t = 0;
-        snappy_uncompressed_length(src_ptr, src_len, &mut dst_add_len);
-
-        // now make sure the vector is large enough
-        dst.reserve(dst_add_len as usize);
-        let dst_ptr = dst[dst_cur_len..].as_mut_ptr();
-        if snappy_uncompress(src_ptr, src_len, dst_ptr, &mut dst_add_len) == 0 {
-            dst.set_len(dst_cur_len + dst_add_len as usize);
-            Ok(())
-        } else {
-            Err(Error::InvalidInputSnappy) // SNAPPY_INVALID_INPUT
-        }
-    }
+    rsnappy::decompress(&mut Cursor::new(src), dst).map_err(|_| Error::InvalidInputSnappy)
 }
 
 pub fn compress(src: &[u8]) -> Result<Vec<u8>> {
-    unsafe {
-        let (_, x) = src.split_at(0);
-        let srclen = x.len() as size_t;
-        let psrc = x.as_ptr();
-        let mut dstlen = snappy_max_compressed_length(srclen);
-        let mut dst = Vec::with_capacity(dstlen as usize);
-        let pdst = dst.as_mut_ptr();
-        if snappy_compress(psrc, srclen, pdst, &mut dstlen) == 0 {
-            dst.set_len(dstlen as usize);
-            Ok(dst)
-        } else {
-            Err(Error::InvalidInputSnappy)
-        }
+    let mut dst = Vec::new();
+    if let Err(_) = rsnappy::compress(&mut Cursor::new(src), &mut dst) {
+        return Err(Error::InvalidInputSnappy);
     }
+    Ok(dst)
 }
 
 // --------------------------------------------------------------------
@@ -216,6 +171,8 @@ impl<'a> Read for SnappyReader<'a> {
 
 #[cfg(test)]
 mod tests {
+    extern crate rsnappy;
+
     use std::io::Read;
 
     use error::{Error, Result};
@@ -280,5 +237,47 @@ mod tests {
         let mut r = SnappyReader::new(COMPRESSED).unwrap();
         r.read_to_end(&mut buf).unwrap();
         assert_eq!(ORIGINAL.as_bytes(), &buf[..]);
+    }
+
+
+    #[test]
+    fn test_snappy_reader_read_to_end_multi() {
+        for _ in 0 .. 3 {
+            let mut buf = Vec::new();
+            let mut r = SnappyReader::new(COMPRESSED).unwrap();
+            r.read_to_end(&mut buf).unwrap();
+            assert_eq!(ORIGINAL.as_bytes(), &buf[..]);
+        }
+    }
+
+    #[cfg(feature = "nightly")]
+    mod benches {
+        extern crate rsnappy;
+
+        use super::COMPRESSED;
+        use super::super::SnappyReader;
+        use std::io::Read;
+
+        use test::{Bencher};
+
+        #[bench]
+        fn bench_snappy_reader_rsnappy(b: &mut Bencher) {
+            b.bytes = COMPRESSED.len() as u64;
+            b.iter(|| {
+                let mut buf = Vec::new();
+                let mut r = SnappyReader::new_rsnappy(COMPRESSED).unwrap();
+                r.read_to_end(&mut buf).unwrap()
+            });
+        }
+
+        #[bench]
+        fn bench_snappy_reader(b: &mut Bencher) {
+            b.bytes = COMPRESSED.len() as u64;
+            b.iter(|| {
+                let mut buf = Vec::new();
+                let mut r = SnappyReader::new(COMPRESSED).unwrap();
+                r.read_to_end(&mut buf).unwrap()
+            });
+        }
     }
 }
