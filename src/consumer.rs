@@ -27,7 +27,7 @@ use error::{Error, Result};
 use utils::{TopicMessage, TopicPartitionOffset, TopicPartitionOffsetError};
 use client::KafkaClient;
 
-const COMMIT_INTERVAL: i32 = 100; // Commit after every 100 message
+const COMMIT_INTERVAL: i32 = 1024; // Commit after every 100 message
 
 #[derive(Default, Debug)]
 pub struct Consumer {
